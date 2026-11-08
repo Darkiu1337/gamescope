@@ -172,10 +172,11 @@ const char usage[] =
 	"  -r, --nested-refresh           game refresh rate (frames per second)\n"
 	"  -m, --max-scale                maximum scale factor\n"
 	"  -S, --scaler                   upscaler type (auto, integer, fit, fill, stretch)\n"
-	"  -F, --filter                   upscaler filter (linear, nearest, fsr, nis, pixel, anime4k)\n"
+	"  -F, --filter                   upscaler filter (linear, nearest, fsr, nis, pixel, anime4k, cunny)\n"
 	"                                     fsr => AMD FidelityFX™ Super Resolution 1.0\n"
 	"                                     nis => NVIDIA Image Scaling v1.0.3\n"
 	"                                     anime4k => Anime4K 2x CNN UL upscaling\n"
+	"                                     cunny => CuNNy 4x16-NVL 2x CNN upscaling\n"
 	"  --sharpness, --fsr-sharpness   upscaler sharpness from 0 (max) to 20 (min)\n"
 	"  --expose-wayland               support wayland clients using xdg-shell\n"
 	"  -s, --mouse-sensitivity        multiply mouse movement by given decimal number\n"
@@ -413,6 +414,8 @@ static enum GamescopeUpscaleFilter parse_upscaler_filter(const char *str)
 		return GamescopeUpscaleFilter::PIXEL;
 	} else if (strcmp(str, "anime4k") == 0) {
 		return GamescopeUpscaleFilter::ANIME4K_2X_CNN_UL;
+	} else if (strcmp(str, "cunny") == 0) {
+		return GamescopeUpscaleFilter::CUNNY_4X16_NVL;
 	} else {
 		fprintf( stderr, "gamescope: invalid value for --filter\n" );
 		exit(1);

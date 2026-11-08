@@ -51,6 +51,7 @@ layout(binding = 2, rgba8) writeonly uniform image2D dst_chroma;
 
 layout(binding = 2, rgba8) writeonly uniform image2D dst1;
 layout(binding = 7, rgba8) writeonly uniform image2D dst2;
+layout(binding = 8, rgba8) writeonly uniform image2D dst3;
 
 layout(binding = 3) uniform sampler2D s_samplers[VKR_SAMPLER_SLOTS];
 layout(binding = 4) uniform sampler2D s_ycbcr_samplers[VKR_SAMPLER_SLOTS];

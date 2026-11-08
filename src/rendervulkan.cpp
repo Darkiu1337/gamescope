@@ -49,6 +49,12 @@
 #include "cs_nis_fp16.h"
 #include "cs_rgb_to_nv12.h"
 #include "cs_anime4k_2x_cnn_ul.h"
+#include "cs_cunny_in.h"
+#include "cs_cunny_conv1.h"
+#include "cs_cunny_conv2.h"
+#include "cs_cunny_conv3.h"
+#include "cs_cunny_conv4.h"
+#include "cs_cunny_out.h"
 
 #define A_CPU
 #include "shaders/ffx_a.h"
@@ -314,6 +320,8 @@ bool CVulkanDevice::BInit(VkInstance instance, VkSurfaceKHR surface)
 	if (!createShaders())
 		return false;
 	if (!createAnime4kULPipelines())
+		return false;
+	if (!createCunnyPipelines())
 		return false;
 	if (!createScratchResources())
 		return false;
@@ -776,7 +784,7 @@ bool CVulkanDevice::createLayouts()
 	for (auto& sampler : ycbcrSamplers)
 		sampler = m_ycbcrSampler;
 
-	std::array<VkDescriptorSetLayoutBinding, 8 > layoutBindings = {
+	std::array<VkDescriptorSetLayoutBinding, 9 > layoutBindings = {
 		VkDescriptorSetLayoutBinding {
 			.binding = 0,
 			.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -797,6 +805,12 @@ bool CVulkanDevice::createLayouts()
 		},
 		VkDescriptorSetLayoutBinding {
 			.binding = 7,
+			.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+			.descriptorCount = 1,
+			.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+		},
+		VkDescriptorSetLayoutBinding {
+			.binding = 8,
 			.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 			.descriptorCount = 1,
 			.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
@@ -912,7 +926,7 @@ bool CVulkanDevice::createPools()
 		},
 		{
 			VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-			uint32_t(m_descriptorSets.size()) * 3,
+			uint32_t(m_descriptorSets.size()) * 4,
 		},
 		{
 			VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -964,6 +978,12 @@ bool CVulkanDevice::createShaders()
 	}
 	SHADER(RGB_TO_NV12, cs_rgb_to_nv12);
 	SHADER(ANIME4K_2X_CNN_UL, cs_anime4k_2x_cnn_ul);
+	SHADER(CUNNY_4X16_IN, cs_cunny_in);
+	SHADER(CUNNY_4X16_CONV1, cs_cunny_conv1);
+	SHADER(CUNNY_4X16_CONV2, cs_cunny_conv2);
+	SHADER(CUNNY_4X16_CONV3, cs_cunny_conv3);
+	SHADER(CUNNY_4X16_CONV4, cs_cunny_conv4);
+	SHADER(CUNNY_4X16_OUT, cs_cunny_out);
 #undef SHADER
 
 	for (uint32_t i = 0; i < shaderInfos.size(); i++)
@@ -1016,6 +1036,39 @@ bool CVulkanDevice::createAnime4kULPipelines()
 		VkResult res = vk.CreateComputePipelines(device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_anime4kULPipelines[pass]);
 		if (res != VK_SUCCESS) {
 			vk_errorf(res, "vkCreateComputePipelines failed for Anime4K UL pass %u", pass);
+			return false;
+		}
+	}
+
+	return true;
+}
+
+bool CVulkanDevice::createCunnyPipelines()
+{
+	static const ShaderType kPasses[6] = {
+		SHADER_TYPE_CUNNY_4X16_IN,
+		SHADER_TYPE_CUNNY_4X16_CONV1,
+		SHADER_TYPE_CUNNY_4X16_CONV2,
+		SHADER_TYPE_CUNNY_4X16_CONV3,
+		SHADER_TYPE_CUNNY_4X16_CONV4,
+		SHADER_TYPE_CUNNY_4X16_OUT,
+	};
+
+	for (uint32_t pass = 0; pass < 6; pass++) {
+		VkComputePipelineCreateInfo pipelineInfo = {
+			.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+			.stage = {
+				.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+				.stage = VK_SHADER_STAGE_COMPUTE_BIT,
+				.module = m_shaderModules[kPasses[pass]],
+				.pName = "main",
+			},
+			.layout = m_pipelineLayout
+		};
+
+		VkResult res = vk.CreateComputePipelines(device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_cunnyPipelines[pass]);
+		if (res != VK_SUCCESS) {
+			vk_errorf(res, "vkCreateComputePipelines failed for CuNNy 4x16-NVL pass %u", pass);
 			return false;
 		}
 	}
@@ -1222,7 +1275,9 @@ void CVulkanDevice::compileAllPipelines()
 {
 	pthread_setname_np( pthread_self(), "gamescope-shdr" );
 
-	std::array<PipelineInfo_t, SHADER_TYPE_COUNT> pipelineInfos;
+	// Value-initialise: compute-only shader types get no SHADER() entry below and
+	// would otherwise be compiled with an uninitialised shader type.
+	std::array<PipelineInfo_t, SHADER_TYPE_COUNT> pipelineInfos = {};
 #define SHADER(type, layer_count, max_ycbcr, blur_layers) pipelineInfos[SHADER_TYPE_##type] = {SHADER_TYPE_##type, layer_count, max_ycbcr, blur_layers}
 	SHADER(BLIT, k_nMaxLayers, k_nMaxYcbcrMask_ToPreCompile, 1);
 	SHADER(BLUR, k_nMaxLayers, k_nMaxYcbcrMask_ToPreCompile, k_nMaxBlurLayers);
@@ -1232,6 +1287,13 @@ void CVulkanDevice::compileAllPipelines()
 	SHADER(EASU, 1, 1, 1);
 	SHADER(NIS, 1, 1, 1);
 	SHADER(RGB_TO_NV12, 1, 1, 1);
+	SHADER(ANIME4K_2X_CNN_UL, 0, 0, 0);
+	SHADER(CUNNY_4X16_IN, 0, 0, 0);
+	SHADER(CUNNY_4X16_CONV1, 0, 0, 0);
+	SHADER(CUNNY_4X16_CONV2, 0, 0, 0);
+	SHADER(CUNNY_4X16_CONV3, 0, 0, 0);
+	SHADER(CUNNY_4X16_CONV4, 0, 0, 0);
+	SHADER(CUNNY_4X16_OUT, 0, 0, 0);
 #undef SHADER
 
 	for (auto& info : pipelineInfos) {
@@ -1662,6 +1724,23 @@ void CVulkanCmdBuffer::bindTargets(gamescope::Rc<CVulkanTexture> target0, gamesc
 		m_textureRefs.emplace_back(std::move(target2));
 }
 
+void CVulkanCmdBuffer::bindTargets4(gamescope::Rc<CVulkanTexture> target0, gamescope::Rc<CVulkanTexture> target1, gamescope::Rc<CVulkanTexture> target2, gamescope::Rc<CVulkanTexture> target3)
+{
+	m_targets[0] = target0.get();
+	m_targets[1] = target1.get();
+	m_targets[2] = target2.get();
+	m_targets[3] = target3.get();
+	m_targetCount = 4;
+	if (target0)
+		m_textureRefs.emplace_back(std::move(target0));
+	if (target1)
+		m_textureRefs.emplace_back(std::move(target1));
+	if (target2)
+		m_textureRefs.emplace_back(std::move(target2));
+	if (target3)
+		m_textureRefs.emplace_back(std::move(target3));
+}
+
 void CVulkanCmdBuffer::clearState()
 {
 	for (auto& texture : m_boundTextures)
@@ -1708,7 +1787,7 @@ void CVulkanCmdBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z)
 
 	VkDescriptorSet descriptorSet = m_device->descriptorSet();
 
-	std::array<VkWriteDescriptorSet, 8> writeDescriptorSets;
+	std::array<VkWriteDescriptorSet, 9> writeDescriptorSets;
 	std::array<VkDescriptorImageInfo, VKR_SAMPLER_SLOTS> imageDescriptors = {};
 	std::array<VkDescriptorImageInfo, VKR_SAMPLER_SLOTS> ycbcrImageDescriptors = {};
 	std::array<VkDescriptorImageInfo, VKR_TARGET_SLOTS> targetDescriptors = {};
@@ -1716,7 +1795,12 @@ void CVulkanCmdBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z)
 	std::array<VkDescriptorImageInfo, VKR_LUT3D_COUNT> lut3DDescriptor = {};
 	VkDescriptorBufferInfo scratchDescriptor = {};
 
-	writeDescriptorSets[0] = {
+	// Bindings are only written for the targets that are actually in use: an
+	// unused binding left unwritten must never be dereferenced by the shader.
+	static const uint32_t kTargetBindings[VKR_TARGET_SLOTS] = { 1, 2, 7, 8 };
+	uint32_t writeCount = 0;
+
+	writeDescriptorSets[writeCount++] = {
 		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		.dstSet = descriptorSet,
 		.dstBinding = 0,
@@ -1726,37 +1810,22 @@ void CVulkanCmdBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z)
 		.pBufferInfo = &scratchDescriptor,
 	};
 
-	writeDescriptorSets[1] = {
-		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		.dstSet = descriptorSet,
-		.dstBinding = 1,
-		.dstArrayElement = 0,
-		.descriptorCount = 1,
-		.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		.pImageInfo = &targetDescriptors[0],
-	};
+	// A YCbCr target occupies two bindings (luma + chroma).
+	uint32_t targetWrites = ( m_targetCount == 1 && m_targets[0]->isYcbcr() ) ? 2 : m_targetCount;
+	for ( uint32_t i = 0; i < targetWrites; i++ )
+	{
+		writeDescriptorSets[writeCount++] = {
+			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+			.dstSet = descriptorSet,
+			.dstBinding = kTargetBindings[i],
+			.dstArrayElement = 0,
+			.descriptorCount = 1,
+			.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+			.pImageInfo = &targetDescriptors[i],
+		};
+	}
 
-	writeDescriptorSets[2] = {
-		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		.dstSet = descriptorSet,
-		.dstBinding = 2,
-		.dstArrayElement = 0,
-		.descriptorCount = 1,
-		.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		.pImageInfo = &targetDescriptors[1],
-	};
-
-	writeDescriptorSets[3] = {
-		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		.dstSet = descriptorSet,
-		.dstBinding = 7,
-		.dstArrayElement = 0,
-		.descriptorCount = 1,
-		.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-		.pImageInfo = &targetDescriptors[2],
-	};
-
-	writeDescriptorSets[4] = {
+	writeDescriptorSets[writeCount++] = {
 		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		.dstSet = descriptorSet,
 		.dstBinding = 3,
@@ -1766,7 +1835,7 @@ void CVulkanCmdBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z)
 		.pImageInfo = imageDescriptors.data(),
 	};
 
-	writeDescriptorSets[5] = {
+	writeDescriptorSets[writeCount++] = {
 		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		.dstSet = descriptorSet,
 		.dstBinding = 4,
@@ -1776,7 +1845,7 @@ void CVulkanCmdBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z)
 		.pImageInfo = ycbcrImageDescriptors.data(),
 	};
 
-	writeDescriptorSets[6] = {
+	writeDescriptorSets[writeCount++] = {
 		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		.dstSet = descriptorSet,
 		.dstBinding = 5,
@@ -1786,7 +1855,7 @@ void CVulkanCmdBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z)
 		.pImageInfo = shaperLutDescriptor.data(),
 	};
 
-	writeDescriptorSets[7] = {
+	writeDescriptorSets[writeCount++] = {
 		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		.dstSet = descriptorSet,
 		.dstBinding = 6,
@@ -1856,7 +1925,7 @@ void CVulkanCmdBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z)
 		}
 	}
 
-	m_device->vk.UpdateDescriptorSets(m_device->device(), writeDescriptorSets.size(), writeDescriptorSets.data(), 0, nullptr);
+	m_device->vk.UpdateDescriptorSets(m_device->device(), writeCount, writeDescriptorSets.data(), 0, nullptr);
 
 	m_device->vk.CmdBindDescriptorSets(m_cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_device->pipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
 
@@ -3596,6 +3665,46 @@ static void update_anime4k_ul_buffers(uint32_t width, uint32_t height, uint32_t 
 }
 
 
+// TODO: Free the textures when cunny is not used anymore
+static void update_cunny_buffers(uint32_t width, uint32_t height, uint32_t outWidth, uint32_t outHeight)
+{
+    if (g_output.cunnyA[0] != nullptr
+        && g_output.cunnyA[0]->width() == width
+        && g_output.cunnyA[0]->height() == height)
+    {
+        return;
+    }
+
+    CVulkanTexture::createFlags createFlags;
+    createFlags.bSampled = true;
+    createFlags.bStorage = true;
+
+    for (int tex = 0; tex < 4; tex++) {
+        g_output.cunnyA[tex] = new CVulkanTexture();
+        if (!g_output.cunnyA[tex]->BInit(width, height, 1u, DRM_FORMAT_ABGR16161616F, createFlags, nullptr))
+        {
+            vk_log.errorf("failed to create cunny A[%d] buffer", tex);
+            return;
+        }
+        g_output.cunnyB[tex] = new CVulkanTexture();
+        if (!g_output.cunnyB[tex]->BInit(width, height, 1u, DRM_FORMAT_ABGR16161616F, createFlags, nullptr))
+        {
+            vk_log.errorf("failed to create cunny B[%d] buffer", tex);
+            return;
+        }
+    }
+
+    g_output.cunnyOut = new CVulkanTexture();
+    if (!g_output.cunnyOut->BInit(outWidth, outHeight, 1u, DRM_FORMAT_ARGB8888, createFlags, nullptr))
+    {
+        vk_log.errorf("failed to create cunny output buffer");
+        return;
+    }
+
+    vk_log.infof("[cunny] input %ux%u cnn %ux%u", width, height, outWidth, outHeight);
+}
+
+
 static bool init_nis_data()
 {
 	// Create the NIS images
@@ -4297,6 +4406,90 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 		bind_all_layers(cmdBuffer.get(), &anime4kFrameInfo);
 		cmdBuffer->bindTarget(compositeImage);
 		cmdBuffer->uploadConstants<BlitPushData_t>(&anime4kFrameInfo);
+		cmdBuffer->dispatch(div_roundup(currentOutputWidth, pixelsPerGroup), div_roundup(currentOutputHeight, pixelsPerGroup));
+	}
+	else if ( frameInfo->useCunny4x16Layer0 )
+	{
+		uint32_t inputX = frameInfo->layers[0].tex->width();
+		uint32_t inputY = frameInfo->layers[0].tex->height();
+
+		uint32_t outX = inputX * 2;
+		uint32_t outY = inputY * 2;
+
+		update_cunny_buffers(inputX, inputY, outX, outY);
+
+		// Machine-readable observation for the Migaki launcher
+		// (scripts/gamescope-migaki.sh --gameid parses this line). Emitted only
+		// when a size changes, so a steady frame loop stays silent.
+		static uint32_t s_lastInW = 0, s_lastInH = 0, s_lastOutW = 0, s_lastOutH = 0;
+		if ( inputX != s_lastInW || inputY != s_lastInH ||
+		     currentOutputWidth != s_lastOutW || currentOutputHeight != s_lastOutH )
+		{
+			s_lastInW = inputX; s_lastInH = inputY;
+			s_lastOutW = currentOutputWidth; s_lastOutH = currentOutputHeight;
+			fprintf( stderr, "MIGAKI_UPSCALE input=%ux%u cnn=%ux%u out=%ux%u\n",
+			         inputX, inputY, outX, outY, currentOutputWidth, currentOutputHeight );
+		}
+
+		const int pixelsPerGroup = 8;
+
+		// Pass 0: RGB -> 16 channels, four feature textures in A
+		cmdBuffer->bindPipeline(g_device.cunnyPipeline(0));
+		cmdBuffer->bindTargets4(g_output.cunnyA[0], g_output.cunnyA[1], g_output.cunnyA[2], g_output.cunnyA[3]);
+		cmdBuffer->bindTexture(0, frameInfo->layers[0].tex);
+		// CuNNy is trained on raw sRGB values, not on decoded linear light.
+		cmdBuffer->setTextureSrgb(0, true);
+		cmdBuffer->setSamplerUnnormalized(0, false);
+		cmdBuffer->setSamplerNearest(0, true);
+		cmdBuffer->uploadConstants<Anime4kPushData_t>(inputX, inputY, outX, outY);
+		cmdBuffer->dispatch(div_roundup(inputX, pixelsPerGroup), div_roundup(inputY, pixelsPerGroup));
+
+		// Passes 1..4: conv1..conv4, ping-pong A <-> B
+		for (int pass = 1; pass <= 4; pass++) {
+			auto& src = (pass % 2 == 1) ? g_output.cunnyA : g_output.cunnyB;
+			auto& dst = (pass % 2 == 1) ? g_output.cunnyB : g_output.cunnyA;
+
+			cmdBuffer->bindPipeline(g_device.cunnyPipeline(pass));
+			cmdBuffer->bindTargets4(dst[0], dst[1], dst[2], dst[3]);
+
+			for (int t = 0; t < 4; t++) {
+				cmdBuffer->bindTexture(t, src[t]);
+				cmdBuffer->setTextureSrgb(t, false);
+				cmdBuffer->setSamplerUnnormalized(t, false);
+				cmdBuffer->setSamplerNearest(t, true);
+			}
+			cmdBuffer->uploadConstants<Anime4kPushData_t>(inputX, inputY, outX, outY);
+			cmdBuffer->dispatch(div_roundup(inputX, pixelsPerGroup), div_roundup(inputY, pixelsPerGroup));
+		}
+
+		// Pass 5: out-shuffle; conv4 wrote the final features back into A
+		cmdBuffer->bindPipeline(g_device.cunnyPipeline(5));
+		cmdBuffer->bindTarget(g_output.cunnyOut);
+		for (int t = 0; t < 4; t++) {
+			cmdBuffer->bindTexture(t, g_output.cunnyA[t]);
+			cmdBuffer->setTextureSrgb(t, false);
+			cmdBuffer->setSamplerUnnormalized(t, false);
+			cmdBuffer->setSamplerNearest(t, true);
+		}
+		cmdBuffer->bindTexture(4, frameInfo->layers[0].tex);
+		cmdBuffer->setTextureSrgb(4, true);
+		cmdBuffer->setSamplerUnnormalized(4, false);
+		cmdBuffer->setSamplerNearest(4, false);
+		cmdBuffer->uploadConstants<Anime4kPushData_t>(inputX, inputY, outX, outY);
+		cmdBuffer->dispatch(div_roundup(inputX, pixelsPerGroup), div_roundup(inputY, pixelsPerGroup));
+
+		struct FrameInfo_t cunnyFrameInfo = *frameInfo;
+		cunnyFrameInfo.layers[0].tex = g_output.cunnyOut;
+
+		float scaleX = (float)outX / (float)currentOutputWidth;
+		float scaleY = (float)outY / (float)currentOutputHeight;
+		float uniformScale = std::max(scaleX, scaleY);
+		cunnyFrameInfo.layers[0].scale.x = uniformScale;
+		cunnyFrameInfo.layers[0].scale.y = uniformScale;
+		cmdBuffer->bindPipeline(g_device.pipeline(SHADER_TYPE_BLIT, cunnyFrameInfo.layerCount, cunnyFrameInfo.ycbcrMask(), 0u, cunnyFrameInfo.colorspaceMask(), outputTF));
+		bind_all_layers(cmdBuffer.get(), &cunnyFrameInfo);
+		cmdBuffer->bindTarget(compositeImage);
+		cmdBuffer->uploadConstants<BlitPushData_t>(&cunnyFrameInfo);
 		cmdBuffer->dispatch(div_roundup(currentOutputWidth, pixelsPerGroup), div_roundup(currentOutputHeight, pixelsPerGroup));
 	}
 	else if ( frameInfo->blurLayer0 )

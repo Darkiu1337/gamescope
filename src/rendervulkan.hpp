@@ -282,6 +282,7 @@ struct FrameInfo_t
 	bool useFSRLayer0;
 	bool useNISLayer0;
 	bool useAnime4k2xCnnULLayer0;
+	bool useCunny4x16Layer0;
 	bool bFadingOut;
 	BlurMode blurLayer0;
 	int blurRadius;
@@ -551,6 +552,11 @@ struct VulkanOutput_t
 	gamescope::OwningRc<CVulkanTexture> anime4kULLayers[7][3];
 	gamescope::OwningRc<CVulkanTexture> anime4kULLast[3];
 	gamescope::OwningRc<CVulkanTexture> anime4kULOut;
+
+	// CuNNy 4x16-NVL - 2 ping-pong sets of 4 textures + 1 output
+	gamescope::OwningRc<CVulkanTexture> cunnyA[4];
+	gamescope::OwningRc<CVulkanTexture> cunnyB[4];
+	gamescope::OwningRc<CVulkanTexture> cunnyOut;
 };
 
 
@@ -564,6 +570,12 @@ enum ShaderType {
 	SHADER_TYPE_NIS,
 	SHADER_TYPE_RGB_TO_NV12,
 	SHADER_TYPE_ANIME4K_2X_CNN_UL,
+	SHADER_TYPE_CUNNY_4X16_IN,
+	SHADER_TYPE_CUNNY_4X16_CONV1,
+	SHADER_TYPE_CUNNY_4X16_CONV2,
+	SHADER_TYPE_CUNNY_4X16_CONV3,
+	SHADER_TYPE_CUNNY_4X16_CONV4,
+	SHADER_TYPE_CUNNY_4X16_OUT,
 
 	SHADER_TYPE_COUNT
 };
@@ -777,6 +789,7 @@ public:
 	VkSampler sampler(SamplerState key);
 	VkPipeline pipeline(ShaderType type, uint32_t layerCount = 1, uint32_t ycbcrMask = 0, uint32_t blur_layers = 0, uint32_t colorspace_mask = 0, uint32_t output_eotf = EOTF_Gamma22, bool itm_enable = false);
 	VkPipeline anime4kULPipeline(uint32_t pass) { return m_anime4kULPipelines[pass]; }
+	VkPipeline cunnyPipeline(uint32_t pass) { return m_cunnyPipelines[pass]; }
 	int32_t findMemoryType( VkMemoryPropertyFlags properties, uint32_t requiredTypeBits );
 	std::unique_ptr<CVulkanCmdBuffer> commandBuffer();
 	uint64_t submit( std::unique_ptr<CVulkanCmdBuffer> cmdBuf);
@@ -850,6 +863,7 @@ protected:
 	bool createPools();
 	bool createShaders();
 	bool createAnime4kULPipelines();
+	bool createCunnyPipelines();
 	bool createScratchResources();
 	VkPipeline compilePipeline(uint32_t layerCount, uint32_t ycbcrMask, ShaderType type, uint32_t blur_layer_count, uint32_t composite_debug, uint32_t colorspace_mask, uint32_t output_eotf, bool itm_enable);
 	void compileAllPipelines();
@@ -885,6 +899,7 @@ protected:
 	std::array<VkShaderModule, SHADER_TYPE_COUNT> m_shaderModules;
 	std::unordered_map<PipelineInfo_t, VkPipeline> m_pipelineMap;
 	VkPipeline m_anime4kULPipelines[9] = {};
+	VkPipeline m_cunnyPipelines[6] = {};
 	std::mutex m_pipelineMutex;
 
 	static constexpr uint32_t k_uMaxConcurrentSubmits = 8;
@@ -946,6 +961,7 @@ public:
 	void setSamplerUnnormalized(uint32_t slot, bool unnormalized);
 	void bindTarget(gamescope::Rc<CVulkanTexture> target);
 	void bindTargets(gamescope::Rc<CVulkanTexture> target0, gamescope::Rc<CVulkanTexture> target1, gamescope::Rc<CVulkanTexture> target2);
+	void bindTargets4(gamescope::Rc<CVulkanTexture> target0, gamescope::Rc<CVulkanTexture> target1, gamescope::Rc<CVulkanTexture> target2, gamescope::Rc<CVulkanTexture> target3);
 	void clearState();
 	template<class PushData, class... Args>
 	void uploadConstants(Args&&... args);

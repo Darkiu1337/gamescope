@@ -71,6 +71,12 @@ shader_src = [
   'shaders/cs_nis_fp16.comp',
   'shaders/cs_rgb_to_nv12.comp',
   'shaders/Anime4k/CNN_x2_UL/cs_anime4k_2x_cnn_ul.comp',
+  'shaders/CuNNy/4x16-NVL/cs_cunny_in.comp',
+  'shaders/CuNNy/4x16-NVL/cs_cunny_conv1.comp',
+  'shaders/CuNNy/4x16-NVL/cs_cunny_conv2.comp',
+  'shaders/CuNNy/4x16-NVL/cs_cunny_conv3.comp',
+  'shaders/CuNNy/4x16-NVL/cs_cunny_conv4.comp',
+  'shaders/CuNNy/4x16-NVL/cs_cunny_out.comp',
 ]
 
 spirv_shaders = glsl_generator.process(shader_src)
